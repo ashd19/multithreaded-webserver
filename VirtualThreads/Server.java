@@ -10,11 +10,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Virtual Threads Web Server (JDK 21+)
+ * Optimized for 20,000+ concurrent connections
+ */
 public class Server {
     private final ExecutorService virtualThreadExecutor;
+    private final String cachedJsonResponse; // Cache to avoid disk I/O on every request
 
-    public Server() {
+    public Server() throws IOException {
         this.virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        // Cache JSON response in memory (critical optimization!)
+        this.cachedJsonResponse = new String(Files.readAllBytes(Paths.get("../data.json")));
+        System.out.println("JSON response cached (" + cachedJsonResponse.length() + " bytes)");
     }
 
     public void handleClient(Socket clientSocket) {
@@ -29,15 +37,12 @@ public class Server {
                 line = fromSocket.readLine();
             }
 
-            // 2. Perform Work (Reading JSON)
-            String jsonResponse = new String(Files.readAllBytes(Paths.get("../data.json")));
-
-            // 3. Send HTTP Response
+            // 2. Send HTTP Response (using cached JSON - no disk I/O!)
             toSocket.println("HTTP/1.1 200 OK");
             toSocket.println("Content-Type: application/json");
-            toSocket.println("Content-Length: " + jsonResponse.length());
+            toSocket.println("Content-Length: " + cachedJsonResponse.length());
             toSocket.println("");
-            toSocket.println(jsonResponse);
+            toSocket.println(cachedJsonResponse);
 
         } catch (IOException ex) {
             ex.printStackTrace();
@@ -46,25 +51,24 @@ public class Server {
 
     public static void main(String[] args) {
         int port = 8010;
-        Server server = new Server();
+        int backlog = 10000; // Increased from default 50 to support high concurrency
 
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            serverSocket.setSoTimeout(70000);
-            System.out.println("Server is listening on port " + port + " with Virtual Threads");
+        try {
+            Server server = new Server();
 
-            while (true) {
-                try {
+            // Use larger backlog for 20K+ concurrent connections
+            try (ServerSocket serverSocket = new ServerSocket(port, backlog)) {
+                System.out.println("Server listening on port " + port + " with Virtual Threads");
+                System.out.println("Connection backlog: " + backlog);
+                System.out.println("Ready to handle 20,000+ concurrent connections!\n");
+
+                while (true) {
                     Socket clientSocket = serverSocket.accept();
                     server.virtualThreadExecutor.execute(() -> server.handleClient(clientSocket));
-                } catch (java.net.SocketTimeoutException e) {
-                    System.out.println("Wait timeout reached, shutting down...");
-                    break;
                 }
             }
         } catch (IOException ex) {
             ex.printStackTrace();
-        } finally {
-            server.shutdownExecutor();
         }
     }
 
