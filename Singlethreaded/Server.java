@@ -11,7 +11,7 @@ public class Server {
     public void run() {
         int port = 8010;
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            serverSocket.setSoTimeout(1000000);
+            // serverSocket.setSoTimeout(1000000);
             System.out.println("Server is listening on port " + port);
             while (true) {
                 try (Socket acceptedConnection = serverSocket.accept()) {
@@ -31,7 +31,7 @@ public class Server {
 
                     // Simulate work by reading a file from disk
                     String jsonResponse = new String(
-                            java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("data.json")));
+                            java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("../data.json")));
 
                     toClient.println("HTTP/1.1 200 OK");
                     toClient.println("Content-Type: application/json");
