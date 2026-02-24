@@ -65,8 +65,7 @@ public class Server {
             // Use larger backlog for high concurrency testing
             try (ServerSocket serverSocket = new ServerSocket(port, backlog)) {
                 System.out.println("Server listening on port " + port + " with Virtual Threads");
-                System.out.println("Connection backlog: " + backlog);
-                System.out.println("⚠️  WARNING: NO CACHING - Disk I/O on every request!\n");
+                // System.out.println("Connection backlog: " + backlog);
 
                 while (true) {
                     Socket clientSocket = serverSocket.accept();

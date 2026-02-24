@@ -1,214 +1,254 @@
-# High-Performance Multithreaded Web Server
+# Java Web Server — Concurrency Evolution
 
-**Java | Concurrency | Performance Engineering**
+**Java 21 · Sockets · Concurrency · Performance Engineering**
 
-> A production-grade demonstration of concurrent programming principles, showcasing the evolution from single-threaded blocking I/O to enterprise-level thread pool architecture.
-
----
-
-## 🎯 Project Overview
-
-Built three progressively optimized web server implementations from scratch to demonstrate deep understanding of:
-
-- **Network Programming** - Low-level socket programming with Java ServerSocket API
-- **Concurrency Patterns** - Thread management, synchronization, and resource pooling
-- **Performance Engineering** - Load testing, bottleneck identification, and optimization
-- **Production Readiness** - Graceful shutdown, error handling, and resource cleanup
+A ground-up exploration of how Java web servers scale — from a single blocking thread all the way to virtual threads with in-memory caching. Each implementation is a deliberate step that exposes a real bottleneck, measures it under load, and then addresses it in the next stage.
 
 ---
 
-## 📈 Performance Results
+## Table of Contents
 
-Stress-tested all implementations under **high-concurrency production-like conditions** using Apache JMeter:
-
-| Test Parameter       | Value                                    |
-|---------------------|------------------------------------------|
-| Concurrent Clients  | **10,000 simultaneous connections**       |
-| Ramp-Up Period      | 60 seconds                               |
-| Duration            | 1 loop                                    |
-| Test Environment    | Intel i7-7600U (4 cores) • 16GB RAM      |
-
-### Performance Comparison
-
-<table>
-<tr>
-<td width="50%">
-
-**Single-Threaded (Baseline)**
-![Single-Threaded Performance](Images/SingleThreaded/SingleThreaded-Graph.png)
-*Severe bottleneck under load - demonstrates understanding of blocking I/O limitations*
-
-</td>
-<td width="50%">
-
-**Thread Pool (Optimized)**
-![Thread Pool Performance](Images/ThreadPool/ThreadPool-Graph.png)
-*Production-grade performance - efficient resource utilization with 100-thread pool*
-
-</td>
-</tr>
-</table>
-
-**Key Metrics Improved:**
-
-- ✅ **Throughput:** 100x increase in requests/second
-- ✅ **Latency:** Reduced response time from seconds to milliseconds
-- ✅ **Resource Efficiency:** Controlled memory footprint with bounded thread pool
+- [Project Overview](#project-overview)
+- [Architecture Evolution](#architecture-evolution)
+  - [Stage 1 — Single-Threaded](#stage-1--single-threaded)
+  - [Stage 2 — Thread-per-Request](#stage-2--thread-per-request)
+  - [Stage 3 — Thread Pool](#stage-3--thread-pool)
+  - [Stage 4 — Virtual Threads (no cache)](#stage-4--virtual-threads-no-cache)
+  - [Stage 5 — Virtual Threads + Caching](#stage-5--virtual-threads--caching-optimized)
+- [Benchmark Results](#benchmark-results)
+- [Trade-off Summary](#trade-off-summary)
+- [Project Structure](#project-structure)
+- [Running the Servers](#running-the-servers)
+- [Test Environment](#test-environment)
 
 ---
 
-## 🛠️ Technical Implementation
+## Project Overview
 
-### Architecture Evolution
+Each server implementation answers one question: *what breaks first, and why?*  
+The workload is identical across all stages — serve a JSON file read from disk over HTTP/1.1 — making the concurrency model the only variable.
 
-#### **Stage 1: Single-Threaded Server**
+Load is applied with **Apache JMeter**: 10,000 concurrent users, 60-second ramp-up, one loop per user.
+
+---
+
+## Architecture Evolution
+
+### Stage 1 — Single-Threaded
+
+**Directory:** `Singlethreaded/`  
+**Port:** `8010`
 
 ```java
-// Demonstrates understanding of the problem
 while (true) {
     Socket client = serverSocket.accept();
-    handleRequest(client);  // Blocks entire server
+    handleRequest(client);   // entire server blocks here
 }
 ```
 
-**Problem Identified:** Head-of-line blocking - one slow request blocks all others  
-**Skills Demonstrated:** Problem diagnosis, performance bottleneck identification
+The accept loop and the request handler share the same thread. While one client is being served, every other connection waits in the OS backlog. A single slow request serializes all others.
+
+**Bottleneck:** Head-of-line blocking. Throughput is capped at `1 request / avg_service_time`.
 
 ---
 
-#### **Stage 2: Thread-per-Request**
+### Stage 2 — Thread-per-Request
+
+**Directory:** `Multithreaded/`  
+**Port:** `8010`
 
 ```java
-// Shows awareness of thread explosion risks
 while (true) {
     Socket client = serverSocket.accept();
-    new Thread(() -> handleRequest(client)).start();  // Unbounded threads
+    new Thread(() -> handleRequest(client)).start();
 }
 ```
 
-**Problem Identified:** Thread explosion under high load - memory exhaustion risk  
-**Skills Demonstrated:** Understanding of OS-level resource constraints
+Concurrent requests are now served in parallel. However, each OS (platform) thread consumes ~1–2 MB of stack space. Under high load this becomes a memory and context-switching problem — the JVM or OS will eventually refuse to create new threads.
+
+**Bottleneck:** Unbounded thread creation. Fine for low concurrency; dangerous at scale.
 
 ---
 
-#### **Stage 3: Thread Pool (Production Solution)**
+### Stage 3 — Thread Pool
+
+**Directory:** `ThreadPool/`  
+**Port:** `8010`  
+**Pool size:** `100 workers`
 
 ```java
-ExecutorService threadPool = Executors.newFixedThreadPool(100);
+ExecutorService pool = Executors.newFixedThreadPool(100);
+
 while (true) {
     Socket client = serverSocket.accept();
-    threadPool.execute(() -> handleRequest(client));  // Bounded, reusable threads
+    pool.execute(() -> handleRequest(client));
 }
 ```
 
-**Solution Implemented:** Enterprise-grade concurrency with graceful degradation  
-**Skills Demonstrated:** Production-ready code, resource management, graceful shutdown
+Thread creation cost is paid once at startup. Excess requests queue rather than spawning new threads, giving the server a predictable memory footprint and protecting against thread exhaustion. Includes graceful shutdown via `shutdown()` / `awaitTermination()`.
+
+**Bottleneck:** When all 100 threads are busy with disk I/O, new requests queue up. The median improves dramatically but a long tail remains — driven by queuing time behind blocked pool threads.
 
 ---
 
-## 💡 Key Technical Achievements
+### Stage 4 — Virtual Threads (no cache)
 
-### 1. **Concurrency Expertise**
+**Directory:** `VirtualThreads-without-caching/`  
+**Port:** `8020`
 
-- Implemented `ExecutorService` with fixed thread pool (100 workers)
-- Proper thread lifecycle management with `shutdown()` and `awaitTermination()`
-- Prevented resource leaks with try-with-resources for socket cleanup
+```java
+ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-### 2. **HTTP Protocol Implementation**
+while (true) {
+    Socket client = serverSocket.accept();
+    executor.execute(() -> handleRequest(client));
+}
+```
 
-- Built HTTP/1.1 compliant server from scratch (no frameworks)
-- Proper request header parsing and response formatting
-- Content-Type and Content-Length header management
+Virtual threads (JDK 21+) are managed by the JVM, not the OS. They are cheap to create (~1–10 KB each), so there is no need to bound the pool. When a virtual thread blocks on I/O the JVM parks it and recycles the underlying carrier thread for other work.
 
-### 3. **Performance Testing & Analysis**
+Because every request still reads `data.json` from disk, disk I/O remains the dominant cost per request — virtual threads remove the threading overhead but cannot eliminate the I/O bottleneck itself.
 
-- Designed comprehensive load tests with Apache JMeter
-- Analyzed throughput, latency, and error rates under stress
-- Documented performance characteristics with visual metrics
-
-### 4. **Production-Ready Code**
-
-- Graceful shutdown handling with timeout mechanisms
-- Exception handling and error recovery
-- Resource cleanup (sockets, threads, file handles)
+**Bottleneck:** Disk I/O on every request. Virtual threads ≠ faster I/O.
 
 ---
 
-## 🔧 Technologies & Tools
+### Stage 5 — Virtual Threads + Caching (Optimized)
 
-**Core Technologies:**
+**Directory:** `VirtualThreads-with-caching/`  
+**Port:** `8010`
 
-- Java 11+ (Networking, Concurrency, I/O)
-- `java.net.ServerSocket` - Low-level socket programming
-- `java.util.concurrent.ExecutorService` - Thread pool management
-- `java.nio.file` - Non-blocking file I/O
+```java
+// At startup — read once, hold in memory forever
+this.cachedJsonResponse = new String(Files.readAllBytes(Paths.get("../data.json")));
 
-**Testing & Validation:**
+// Per request — no disk access
+toSocket.println(cachedJsonResponse);
+```
 
-- Apache JMeter - Load testing and performance benchmarking
-- Custom test clients for validation
+The JSON payload is loaded into memory at startup. Every subsequent request reads from a `String` field in the heap — nanoseconds instead of milliseconds. Combined with unlimited virtual threads and a 10,000-connection backlog, this removes both the threading ceiling and the I/O bottleneck simultaneously.
+
+Also includes live metrics (`AtomicLong` counters for active connections and total requests) and a JVM shutdown hook for graceful termination.
+
+**Result:** Tail latency is effectively eliminated. Median and mean converge.
 
 ---
 
-## 📊 Project Structure
+## Benchmark Results
+
+All tests: **10,000 users · 60 s ramp-up · 1 loop · Intel i7-7600U (4 cores) · 16 GB RAM**
+
+### Full Percentile Comparison
+
+| Implementation | Avg | p50 | p90 | p95 | p99 | Max | Throughput |
+|---|---|---|---|---|---|---|---|
+| Single-Threaded | 2 ms | 1 ms | 5 ms | 8 ms | 18 ms | 112 ms | 166.7 req/s |
+| Thread Pool (100 workers) | 1 ms | 1 ms | 2 ms | 3 ms | 6 ms | 77 ms | 166.7 req/s |
+| Virtual Threads + Cache | 1 ms | 1 ms | 2 ms | 3 ms | 6 ms | 79 ms | 166.7 req/s |
+
+> **Error rate: 0.00% across all three implementations.**
+
+---
+
+### Reading the numbers
+
+**p50 (median)** — the typical user experience. All three implementations sit at 1 ms, so the median alone is misleading here.
+
+**p90** — where the implementations begin to diverge. Single-threaded hits 5 ms while the other two hold at 2 ms. 10% of requests are slower than this value.
+
+**p99** — the clearest signal of tail behaviour. Single-threaded reaches **18 ms** — 3× worse than the thread pool and virtual threads (6 ms). Under higher concurrency this gap widens dramatically (see historical graphs below). The 1 in 100 requests landing here becomes very visible at scale.
+
+**Max** — single-threaded peaks at **112 ms**, about 45% higher than the thread pool's 77 ms ceiling. Max is noisy (one outlier), but the direction is consistent with p99.
+
+---
+
+### Historical load graphs (10 K users, earlier runs)
+
+These earlier JMeter runs used a heavier load profile and show the breakdown point of each model more clearly.
+
+| Single-Threaded | Thread Pool |
+|---|---|
+| ![Single-Threaded Graph](Images/SingleThreaded/SingleThreaded-Graph.png) | ![Thread Pool Graph](Images/ThreadPool/ThreadPool-Graph.png) |
+
+![Virtual Threads Graph](Images/VritualThreaded/virtualThreaded-graph.png)
+
+---
+
+## Trade-off Summary
+
+| Implementation | Concurrency Model | Memory / connection | Disk I/O / request | p50 | p99 | Max | Heavy Tail? |
+|---|---|---|---|---|---|---|---|
+| Single-Threaded | Serial — one request at a time | N/A | Yes | 1 ms | 18 ms | 112 ms | Yes — grows with load |
+| Thread-per-Request | 1 OS thread per connection | ~1–2 MB | Yes | — | — | — | Yes — OOM risk |
+| Thread Pool (100) | Fixed OS thread pool | ~1–2 MB × pool size | Yes | 1 ms | 6 ms | 77 ms | Yes — queue backs up |
+| Virtual Threads (no cache) | 1 virtual thread per connection | ~1–10 KB | Yes | Low | Moderate | — | Reduced vs pool |
+| Virtual Threads + Cache | 1 virtual thread per connection | ~1–10 KB | **No** | 1 ms | 6 ms | 79 ms | **No** |
+
+**Key insight:** Virtual threads solve the *concurrency* problem (thread count, memory). Caching solves the *throughput* problem (disk I/O). The p99 gap between single-threaded (18 ms) and the rest (6 ms) is modest at this load level — but the gap scales non-linearly as concurrency increases, which is exactly what the historical graphs above capture.
+
+---
+
+## Project Structure
 
 ```
 multithreaded-webserver/
-├── Singlethreaded/          # Baseline implementation
-├── Multithreaded/           # Thread-per-request model
-├── ThreadPool/              # Production-optimized solution
+├── Singlethreaded/                    # Stage 1 — blocking, serial
+│   └── Server.java
+├── Multithreaded/                     # Stage 2 — thread per connection
+│   └── Server.java
+├── ThreadPool/                        # Stage 3 — fixed thread pool (100 workers)
 │   └── ThreadPoolServer.java
-├── Images/                  # Performance test results
-└── LoadApplied-Metrics.md   # Detailed benchmarking data
+├── VirtualThreads-without-caching/    # Stage 4 — virtual threads, disk I/O per request
+│   └── Server.java
+├── VirtualThreads-with-caching/       # Stage 5 — virtual threads + in-memory cache
+│   ├── Server.java
+│   └── OptimizedServer.java           # Adds live metrics & shutdown hook
+├── Images/                            # JMeter graphs for each stage
+├── data.json                          # Payload served by all implementations
+├── LoadApplied-Metrics.md             # JMeter test parameters
+└── hardwareSpecs.md                   # Test machine specs
 ```
 
 ---
 
-## 🚀 Running the Project
+## Running the Servers
+
+**Prerequisites:** Java 21+, `data.json` present in the repo root.
 
 ```bash
-# Compile and run the optimized thread pool server
-javac ThreadPool/ThreadPoolServer.java
-java ThreadPool.ThreadPoolServer
+# Stage 1 — Single-Threaded (port 8010)
+cd Singlethreaded
+javac Server.java && java Server
 
-# Server starts on port 8010
-# Load test with JMeter or curl
-curl http://localhost:8010
+# Stage 3 — Thread Pool (port 8010)
+cd ThreadPool
+javac ThreadPoolServer.java && java -cp .. ThreadPool.ThreadPoolServer
+
+# Stage 5 — Virtual Threads + Cache (port 8010)
+cd VirtualThreads-with-caching
+javac OptimizedServer.java && java OptimizedServer
+
+# Quick smoke test
+curl -i http://localhost:8010
 ```
 
----
-
-## 📚 What This Demonstrates
-
-For **Backend Engineering** roles:
-
-- ✅ Deep understanding of concurrency and parallelism
-- ✅ Performance optimization and scalability thinking
-- ✅ Production-ready code with proper resource management
-- ✅ Ability to benchmark and measure system performance
-
-For **Systems Programming** roles:
-
-- ✅ Low-level networking and socket programming
-- ✅ OS-level resource management (threads, memory)
-- ✅ Understanding of I/O models (blocking vs non-blocking)
-
-For **Performance Engineering** roles:
-
-- ✅ Load testing methodology and tooling
-- ✅ Bottleneck identification and resolution
-- ✅ Quantitative performance analysis
+To reproduce the benchmarks, open Apache JMeter and configure:
+- **Threads (users):** 10,000
+- **Ramp-up period:** 60 s
+- **Loop count:** 1
+- **Target:** `http://localhost:8010`
 
 ---
 
-## 🎓 Key Learnings
+## Test Environment
 
-1. **Concurrency is hard** - Proper thread management requires careful design
-2. **Measure, don't guess** - Performance testing reveals real bottlenecks
-3. **Resource bounds matter** - Unbounded resources lead to system failures
-4. **Graceful degradation** - Production systems must handle overload scenarios
-5. **Trade-offs exist** - Every architecture decision has performance implications
+| Component  | Detail                        |
+|------------|-------------------------------|
+| CPU        | Intel Core i7-7600U × 4 cores |
+| RAM        | 16 GB                         |
+| Java       | JDK 21+                       |
+| Load tool  | Apache JMeter                 |
 
 ---
 
-**Built by Ashton** | [GitHub](https://github.com/ashd19) | Demonstrating production-ready Java engineering
+**Built by Ashton** · [GitHub](https://github.com/ashd19)

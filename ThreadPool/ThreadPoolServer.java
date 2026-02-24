@@ -7,7 +7,7 @@ import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class ThreadPoolServer  {
+public class ThreadPoolServer {
     private final ExecutorService threadPool;
 
     public ThreadPoolServer(int poolSize) {
@@ -26,7 +26,7 @@ public class ThreadPoolServer  {
             }
 
             // 2. Perform Work (Reading JSON)
-            String jsonResponse = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("../data.json")));
+            String jsonResponse = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("data.json")));
 
             // 3. Send HTTP Response
             toSocket.println("HTTP/1.1 200 OK");
