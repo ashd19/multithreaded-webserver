@@ -9,5 +9,5 @@ For Both Variations
     30
 
 [3] Loop count
-    Infinite
+    1
     Same user on each iteration
