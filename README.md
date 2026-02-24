@@ -23,9 +23,9 @@ Stress-tested all implementations under **high-concurrency production-like condi
 
 | Test Parameter       | Value                                    |
 |---------------------|------------------------------------------|
-| Concurrent Clients  | **6,000 simultaneous connections**       |
-| Ramp-Up Period      | 30 seconds                               |
-| Duration            | Continuous (infinite loop)               |
+| Concurrent Clients  | **10,000 simultaneous connections**       |
+| Ramp-Up Period      | 60 seconds                               |
+| Duration            | 1 loop                                    |
 | Test Environment    | Intel i7-7600U (4 cores) • 16GB RAM      |
 
 ### Performance Comparison
@@ -211,4 +211,4 @@ For **Performance Engineering** roles:
 
 ---
 
-**Built by Ash** | [GitHub](https://github.com/ashd19) | Demonstrating production-ready Java engineering
+**Built by Ashton** | [GitHub](https://github.com/ashd19) | Demonstrating production-ready Java engineering
